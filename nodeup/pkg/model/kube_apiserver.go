@@ -31,7 +31,6 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/util/pkg/architectures"
-	"k8s.io/kops/util/pkg/exec"
 	"k8s.io/kops/util/pkg/proxy"
 
 	v1 "k8s.io/api/core/v1"
@@ -56,34 +55,115 @@ func (b *KubeAPIServerBuilder) Build(c *fi.ModelBuilderContext) error {
 		return nil
 	}
 
-	if err := b.writeAuthenticationConfig(c); err != nil {
+	pathSrvKAPI := filepath.Join(b.PathSrvKubernetes(), "kube-apiserver")
+
+	var kubeAPIServer kops.KubeAPIServerConfig
+	if b.NodeupConfig.APIServerConfig.KubeAPIServer != nil {
+		kubeAPIServer = *b.NodeupConfig.APIServerConfig.KubeAPIServer
+	}
+
+	if err := b.writeAuthenticationConfig(c, &kubeAPIServer); err != nil {
 		return err
 	}
 
-	if b.Cluster.Spec.EncryptionConfig != nil {
-		if *b.Cluster.Spec.EncryptionConfig {
-			encryptionConfigPath := fi.String(filepath.Join(b.PathSrvKubernetes(), "encryptionconfig.yaml"))
+	if b.NodeupConfig.APIServerConfig.EncryptionConfigSecretHash != "" {
+		encryptionConfigPath := fi.String(filepath.Join(pathSrvKAPI, "encryptionconfig.yaml"))
 
-			b.Cluster.Spec.KubeAPIServer.EncryptionProviderConfig = encryptionConfigPath
+		kubeAPIServer.EncryptionProviderConfig = encryptionConfigPath
 
-			key := "encryptionconfig"
-			encryptioncfg, err := b.SecretStore.Secret(key)
-			if err == nil {
-				contents := string(encryptioncfg.Data)
-				t := &nodetasks.File{
-					Path:     *encryptionConfigPath,
-					Contents: fi.NewStringResource(contents),
-					Mode:     fi.String("600"),
-					Type:     nodetasks.FileType_File,
-				}
-				c.AddTask(t)
-			} else {
-				return fmt.Errorf("encryptionConfig enabled, but could not load encryptionconfig secret: %v", err)
+		key := "encryptionconfig"
+		encryptioncfg, err := b.SecretStore.Secret(key)
+		if err == nil {
+			contents := string(encryptioncfg.Data)
+			t := &nodetasks.File{
+				Path:     *encryptionConfigPath,
+				Contents: fi.NewStringResource(contents),
+				Mode:     fi.String("600"),
+				Type:     nodetasks.FileType_File,
+			}
+			c.AddTask(t)
+		} else {
+			return fmt.Errorf("encryptionConfig enabled, but could not load encryptionconfig secret: %v", err)
+		}
+	}
+
+	kubeAPIServer.ServiceAccountKeyFile = append(kubeAPIServer.ServiceAccountKeyFile, filepath.Join(pathSrvKAPI, "service-account.pub"))
+	c.AddTask(&nodetasks.File{
+		Path:     filepath.Join(pathSrvKAPI, "service-account.pub"),
+		Contents: fi.NewStringResource(b.NodeupConfig.APIServerConfig.ServiceAccountPublicKeys),
+		Type:     nodetasks.FileType_File,
+		Mode:     s("0600"),
+	})
+
+	// Set the signing key if we're using Service Account Token VolumeProjection
+	if kubeAPIServer.ServiceAccountSigningKeyFile == nil {
+		if fi.StringValue(kubeAPIServer.ServiceAccountIssuer) != "" {
+			s := filepath.Join(pathSrvKAPI, "service-account.key")
+			kubeAPIServer.ServiceAccountSigningKeyFile = &s
+			if err := b.BuildPrivateKeyTask(c, "service-account", pathSrvKAPI, "service-account", nil, nil); err != nil {
+				return err
 			}
 		}
 	}
+
+	if b.UseEtcdManager() {
+		c.AddTask(&nodetasks.File{
+			Path:     filepath.Join(pathSrvKAPI, "etcd-ca.crt"),
+			Contents: fi.NewStringResource(b.NodeupConfig.CAs["etcd-clients-ca"]),
+			Type:     nodetasks.FileType_File,
+			Mode:     fi.String("0644"),
+		})
+		kubeAPIServer.EtcdCAFile = filepath.Join(pathSrvKAPI, "etcd-ca.crt")
+
+		issueCert := &nodetasks.IssueCert{
+			Name:      "etcd-client",
+			Signer:    "etcd-clients-ca",
+			KeypairID: b.NodeupConfig.KeypairIDs["etcd-clients-ca"],
+			Type:      "client",
+			Subject: nodetasks.PKIXName{
+				CommonName: "kube-apiserver",
+			},
+		}
+		c.AddTask(issueCert)
+		if err := issueCert.AddFileTasks(c, pathSrvKAPI, issueCert.Name, "", nil); err != nil {
+			return err
+		}
+		kubeAPIServer.EtcdCertFile = filepath.Join(pathSrvKAPI, "etcd-client.crt")
+		kubeAPIServer.EtcdKeyFile = filepath.Join(pathSrvKAPI, "etcd-client.key")
+	} else if b.UseEtcdTLS() {
+		kubeAPIServer.EtcdCAFile = filepath.Join(b.PathSrvKubernetes(), "ca.crt")
+		kubeAPIServer.EtcdCertFile = filepath.Join(b.PathSrvKubernetes(), "etcd-client.pem")
+		kubeAPIServer.EtcdKeyFile = filepath.Join(b.PathSrvKubernetes(), "etcd-client-key.pem")
+	}
+
 	{
-		pod, err := b.buildPod()
+		c.AddTask(&nodetasks.File{
+			Path:     filepath.Join(pathSrvKAPI, "apiserver-aggregator-ca.crt"),
+			Contents: fi.NewStringResource(b.NodeupConfig.CAs["apiserver-aggregator-ca"]),
+			Type:     nodetasks.FileType_File,
+			Mode:     fi.String("0644"),
+		})
+		kubeAPIServer.RequestheaderClientCAFile = filepath.Join(pathSrvKAPI, "apiserver-aggregator-ca.crt")
+
+		issueCert := &nodetasks.IssueCert{
+			Name:      "apiserver-aggregator",
+			Signer:    "apiserver-aggregator-ca",
+			KeypairID: b.NodeupConfig.KeypairIDs["apiserver-aggregator-ca"],
+			Type:      "client",
+			// Must match RequestheaderAllowedNames
+			Subject: nodetasks.PKIXName{CommonName: "aggregator"},
+		}
+		c.AddTask(issueCert)
+		err := issueCert.AddFileTasks(c, pathSrvKAPI, "apiserver-aggregator", "", nil)
+		if err != nil {
+			return err
+		}
+		kubeAPIServer.ProxyClientCertFile = fi.String(filepath.Join(pathSrvKAPI, "apiserver-aggregator.crt"))
+		kubeAPIServer.ProxyClientKeyFile = fi.String(filepath.Join(pathSrvKAPI, "apiserver-aggregator.key"))
+	}
+
+	{
+		pod, err := b.buildPod(&kubeAPIServer)
 		if err != nil {
 			return fmt.Errorf("error building kube-apiserver manifest: %v", err)
 		}
@@ -108,10 +188,11 @@ func (b *KubeAPIServerBuilder) Build(c *fi.ModelBuilderContext) error {
 	}
 
 	issueCert := &nodetasks.IssueCert{
-		Name:    "kubelet-api",
-		Signer:  fi.CertificateIDCA,
-		Type:    "client",
-		Subject: nodetasks.PKIXName{CommonName: "kubelet-api"},
+		Name:      "kubelet-api",
+		Signer:    fi.CertificateIDCA,
+		KeypairID: b.NodeupConfig.KeypairIDs[fi.CertificateIDCA],
+		Type:      "client",
+		Subject:   nodetasks.PKIXName{CommonName: "kubelet-api"},
 	}
 	c.AddTask(issueCert)
 	err := issueCert.AddFileTasks(c, b.PathSrvKubernetes(), "kubelet-api", "", nil)
@@ -130,7 +211,7 @@ func (b *KubeAPIServerBuilder) Build(c *fi.ModelBuilderContext) error {
 	return nil
 }
 
-func (b *KubeAPIServerBuilder) writeAuthenticationConfig(c *fi.ModelBuilderContext) error {
+func (b *KubeAPIServerBuilder) writeAuthenticationConfig(c *fi.ModelBuilderContext, kubeAPIServer *kops.KubeAPIServerConfig) error {
 	if b.Cluster.Spec.Authentication == nil || b.Cluster.Spec.Authentication.IsEmpty() {
 		return nil
 	}
@@ -177,28 +258,16 @@ func (b *KubeAPIServerBuilder) writeAuthenticationConfig(c *fi.ModelBuilderConte
 
 	if b.Cluster.Spec.Authentication.Aws != nil {
 		id := "aws-iam-authenticator"
-		b.Cluster.Spec.KubeAPIServer.AuthenticationTokenWebhookConfigFile = fi.String(PathAuthnConfig)
+		kubeAPIServer.AuthenticationTokenWebhookConfigFile = fi.String(PathAuthnConfig)
 
 		{
-			caCertificate, err := b.NodeupModelContext.KeyStore.FindCert(fi.CertificateIDCA)
-			if err != nil {
-				return fmt.Errorf("error fetching AWS IAM Authentication CA certificate from keystore: %v", err)
-			}
-			if caCertificate == nil {
-				return fmt.Errorf("AWS IAM  Authentication CA certificate %q not found", fi.CertificateIDCA)
-			}
-
 			cluster := kubeconfig.KubectlCluster{
-				Server: "https://127.0.0.1:21362/authenticate",
+				Server:                   "https://127.0.0.1:21362/authenticate",
+				CertificateAuthorityData: []byte(b.NodeupConfig.CAs[fi.CertificateIDCA]),
 			}
 			context := kubeconfig.KubectlContext{
 				Cluster: "aws-iam-authenticator",
 				User:    "kube-apiserver",
-			}
-
-			cluster.CertificateAuthorityData, err = caCertificate.AsBytes()
-			if err != nil {
-				return fmt.Errorf("error encoding AWS IAM Authentication CA certificate: %v", err)
 			}
 
 			config := kubeconfig.KubectlConfig{}
@@ -242,10 +311,11 @@ func (b *KubeAPIServerBuilder) writeAuthenticationConfig(c *fi.ModelBuilderConte
 
 		{
 			issueCert := &nodetasks.IssueCert{
-				Name:    id,
-				Signer:  fi.CertificateIDCA,
-				Type:    "server",
-				Subject: nodetasks.PKIXName{CommonName: id},
+				Name:      id,
+				Signer:    fi.CertificateIDCA,
+				KeypairID: b.NodeupConfig.KeypairIDs[fi.CertificateIDCA],
+				Type:      "server",
+				Subject:   nodetasks.PKIXName{CommonName: id},
 				AlternateNames: []string{
 					"localhost",
 					"127.0.0.1",
@@ -280,19 +350,7 @@ func (b *KubeAPIServerBuilder) writeAuthenticationConfig(c *fi.ModelBuilderConte
 }
 
 // buildPod is responsible for generating the kube-apiserver pod and thus manifest file
-func (b *KubeAPIServerBuilder) buildPod() (*v1.Pod, error) {
-	kubeAPIServer := b.Cluster.Spec.KubeAPIServer
-
-	// TODO pass the public key instead. We would first need to segregate the secrets better.
-	kubeAPIServer.ServiceAccountKeyFile = append(kubeAPIServer.ServiceAccountKeyFile, filepath.Join(b.PathSrvKubernetes(), "service-account.key"))
-
-	// Set the signing key if we're using Service Account Token VolumeProjection
-	if kubeAPIServer.ServiceAccountSigningKeyFile == nil {
-		if fi.StringValue(kubeAPIServer.ServiceAccountIssuer) != "" {
-			s := filepath.Join(b.PathSrvKubernetes(), "service-account.key")
-			kubeAPIServer.ServiceAccountSigningKeyFile = &s
-		}
-	}
+func (b *KubeAPIServerBuilder) buildPod(kubeAPIServer *kops.KubeAPIServerConfig) (*v1.Pod, error) {
 	// If clientCAFile is not specified, set it to the default value ${PathSrvKubernetes}/ca.crt
 	if kubeAPIServer.ClientCAFile == "" {
 		kubeAPIServer.ClientCAFile = filepath.Join(b.PathSrvKubernetes(), "ca.crt")
@@ -313,54 +371,25 @@ func (b *KubeAPIServerBuilder) buildPod() (*v1.Pod, error) {
 		}
 	}
 
-	var mainEtcdCluster, eventsEtcdCluster string
-	if b.IsMaster {
-		mainEtcdCluster = "https://127.0.0.1:4001"
-		eventsEtcdCluster = "https://127.0.0.1:4002"
-	} else {
-		host := b.Cluster.ObjectMeta.Name
-		mainEtcdCluster = "https://main.etcd." + host + ":4001"
-		eventsEtcdCluster = "https://events.etcd." + host + ":4002"
-	}
-
-	if b.UseEtcdManager() && b.UseEtcdTLS() {
-		basedir := "/etc/kubernetes/pki/kube-apiserver"
-		kubeAPIServer.EtcdCAFile = filepath.Join(basedir, "etcd-ca.crt")
-		kubeAPIServer.EtcdCertFile = filepath.Join(basedir, "etcd-client.crt")
-		kubeAPIServer.EtcdKeyFile = filepath.Join(basedir, "etcd-client.key")
-		kubeAPIServer.EtcdServers = []string{mainEtcdCluster}
-		kubeAPIServer.EtcdServersOverrides = []string{"/events#" + eventsEtcdCluster}
-	} else if b.UseEtcdTLS() {
-		kubeAPIServer.EtcdCAFile = filepath.Join(b.PathSrvKubernetes(), "ca.crt")
-		kubeAPIServer.EtcdCertFile = filepath.Join(b.PathSrvKubernetes(), "etcd-client.pem")
-		kubeAPIServer.EtcdKeyFile = filepath.Join(b.PathSrvKubernetes(), "etcd-client-key.pem")
-		kubeAPIServer.EtcdServers = []string{mainEtcdCluster}
-		kubeAPIServer.EtcdServersOverrides = []string{"/events#" + eventsEtcdCluster}
+	// we need to replace 127.0.0.1 for etcd urls with the dns names in case this apiserver is not
+	// running on master nodes
+	if !b.IsMaster {
+		clusterName := b.Cluster.ObjectMeta.Name
+		mainEtcdDNSName := "main.etcd." + clusterName
+		eventsEtcdDNSName := "events.etcd." + clusterName
+		for i := range kubeAPIServer.EtcdServers {
+			kubeAPIServer.EtcdServers[i] = strings.ReplaceAll(kubeAPIServer.EtcdServers[i], "127.0.0.1", mainEtcdDNSName)
+		}
+		for i := range kubeAPIServer.EtcdServersOverrides {
+			if strings.HasPrefix(kubeAPIServer.EtcdServersOverrides[i], "/events") {
+				kubeAPIServer.EtcdServersOverrides[i] = strings.ReplaceAll(kubeAPIServer.EtcdServersOverrides[i], "127.0.0.1", eventsEtcdDNSName)
+			}
+		}
 	}
 
 	// @note we are making assumption were using the ones created by the pki model, not custom defined ones
 	kubeAPIServer.KubeletClientCertificate = filepath.Join(b.PathSrvKubernetes(), "kubelet-api.crt")
 	kubeAPIServer.KubeletClientKey = filepath.Join(b.PathSrvKubernetes(), "kubelet-api.key")
-
-	{
-		certPath := filepath.Join(b.PathSrvKubernetes(), "apiserver-aggregator.crt")
-		kubeAPIServer.ProxyClientCertFile = &certPath
-		keyPath := filepath.Join(b.PathSrvKubernetes(), "apiserver-aggregator.key")
-		kubeAPIServer.ProxyClientKeyFile = &keyPath
-	}
-
-	// APIServer aggregation options
-	{
-		cert, err := b.KeyStore.FindCert("apiserver-aggregator-ca")
-		if err != nil {
-			return nil, fmt.Errorf("apiserver aggregator CA cert lookup failed: %v", err.Error())
-		}
-
-		if cert != nil {
-			certPath := filepath.Join(b.PathSrvKubernetes(), "apiserver-aggregator-ca.crt")
-			kubeAPIServer.RequestheaderClientCAFile = certPath
-		}
-	}
 
 	// @fixup: the admission controller migrated from --admission-control to --enable-admission-plugins, but
 	// most people will still have c.Spec.KubeAPIServer.AdmissionControl references into their configuration we need
@@ -370,15 +399,14 @@ func (b *KubeAPIServerBuilder) buildPod() (*v1.Pod, error) {
 		// @note: note sure if this is the best place to put it, I could place into the validation.go which has the benefit of
 		// fixing up the manifests itself, but that feels VERY hacky
 		// @note: it's fine to use AdmissionControl here and it's not populated by the model, thus the only data could have come from the cluster spec
-		c := b.Cluster.Spec.KubeAPIServer
-		if len(c.AdmissionControl) > 0 {
-			c.EnableAdmissionPlugins = append([]string(nil), c.AdmissionControl...)
-			c.AdmissionControl = []string{}
+		if len(kubeAPIServer.AdmissionControl) > 0 {
+			kubeAPIServer.EnableAdmissionPlugins = append([]string(nil), kubeAPIServer.AdmissionControl...)
+			kubeAPIServer.AdmissionControl = []string{}
 		}
 	}
 
 	// build the kube-apiserver flags for the service
-	flags, err := flagbuilder.BuildFlagsList(b.Cluster.Spec.KubeAPIServer)
+	flags, err := flagbuilder.BuildFlagsList(kubeAPIServer)
 	if err != nil {
 		return nil, fmt.Errorf("error building kube-apiserver flags: %v", err)
 	}
@@ -478,8 +506,8 @@ func (b *KubeAPIServerBuilder) buildPod() (*v1.Pod, error) {
 		Ports: []v1.ContainerPort{
 			{
 				Name:          "https",
-				ContainerPort: b.Cluster.Spec.KubeAPIServer.SecurePort,
-				HostPort:      b.Cluster.Spec.KubeAPIServer.SecurePort,
+				ContainerPort: kubeAPIServer.SecurePort,
+				HostPort:      kubeAPIServer.SecurePort,
 			},
 		},
 		Resources: v1.ResourceRequirements{
@@ -498,38 +526,18 @@ func (b *KubeAPIServerBuilder) buildPod() (*v1.Pod, error) {
 
 	// Log both to docker and to the logfile
 	addHostPathMapping(pod, container, "logfile", "/var/log/kube-apiserver.log").ReadOnly = false
-	if b.IsKubernetesGTE("1.15") {
-		// From k8s 1.15, we use lighter containers that don't include shells
-		// But they have richer logging support via klog
-		container.Command = []string{"/usr/local/bin/kube-apiserver"}
-		container.Args = append(
-			sortedStrings(flags),
-			"--logtostderr=false", //https://github.com/kubernetes/klog/issues/60
-			"--alsologtostderr",
-			"--log-file=/var/log/kube-apiserver.log")
-	} else {
-		container.Command = exec.WithTee(
-			"/usr/local/bin/kube-apiserver",
-			sortedStrings(flags),
-			"/var/log/kube-apiserver.log")
-	}
+	// We use lighter containers that don't include shells
+	// But they have richer logging support via klog
+	container.Command = []string{"/usr/local/bin/kube-apiserver"}
+	container.Args = append(
+		sortedStrings(flags),
+		"--logtostderr=false", //https://github.com/kubernetes/klog/issues/60
+		"--alsologtostderr",
+		"--log-file=/var/log/kube-apiserver.log")
 
 	for _, path := range b.SSLHostPaths() {
 		name := strings.Replace(path, "/", "", -1)
 		addHostPathMapping(pod, container, name, path)
-	}
-
-	if b.UseEtcdManager() {
-		volumeType := v1.HostPathDirectoryOrCreate
-		addHostPathVolume(pod, container,
-			v1.HostPathVolumeSource{
-				Path: "/etc/kubernetes/pki/kube-apiserver",
-				Type: &volumeType,
-			},
-			v1.VolumeMount{
-				Name:     "pki",
-				ReadOnly: false,
-			})
 	}
 
 	// Add cloud config file if needed
@@ -547,7 +555,7 @@ func (b *KubeAPIServerBuilder) buildPod() (*v1.Pod, error) {
 		addHostPathMapping(pod, container, "srvsshproxy", pathSrvSshproxy)
 	}
 
-	auditLogPath := b.Cluster.Spec.KubeAPIServer.AuditLogPath
+	auditLogPath := kubeAPIServer.AuditLogPath
 	// Don't mount a volume if the mount path is set to '-' for stdout logging
 	// See https://kubernetes.io/docs/tasks/debug-application-cluster/audit/#audit-backends
 	if auditLogPath != nil && *auditLogPath != "-" {

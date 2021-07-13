@@ -25,13 +25,14 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
 // +kops:fitask
 type AutoscalingLifecycleHook struct {
 	ID        *string
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	// HookName is the name of the lifecycle hook.
 	// It needs to be unique within the autoscaling group.
@@ -120,11 +121,11 @@ func (*AutoscalingLifecycleHook) RenderAWS(t *awsup.AWSAPITarget, a, e, changes 
 }
 
 type terraformASGLifecycleHook struct {
-	Name                 *string            `json:"name" cty:"name"`
-	AutoScalingGroupName *terraform.Literal `json:"autoscaling_group_name" cty:"autoscaling_group_name"`
-	DefaultResult        *string            `json:"default_result" cty:"default_result"`
-	HeartbeatTimeout     *int64             `json:"heartbeat_timeout" cty:"heartbeat_timeout"`
-	LifecycleTransition  *string            `json:"lifecycle_transition" cty:"lifecycle_transition"`
+	Name                 *string                  `json:"name" cty:"name"`
+	AutoScalingGroupName *terraformWriter.Literal `json:"autoscaling_group_name" cty:"autoscaling_group_name"`
+	DefaultResult        *string                  `json:"default_result" cty:"default_result"`
+	HeartbeatTimeout     *int64                   `json:"heartbeat_timeout" cty:"heartbeat_timeout"`
+	LifecycleTransition  *string                  `json:"lifecycle_transition" cty:"lifecycle_transition"`
 }
 
 func (_ *AutoscalingLifecycleHook) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *AutoscalingLifecycleHook) error {

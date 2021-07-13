@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/endpoints"
+	awsIam "github.com/aws/aws-sdk-go/service/iam"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/dns"
@@ -30,16 +32,18 @@ import (
 	"k8s.io/kops/pkg/util/stringorslice"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awstasks"
+	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 )
 
 // IAMModelBuilder configures IAM objects
 type IAMModelBuilder struct {
 	*AWSModelContext
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 	Cluster   *kops.Cluster
 }
 
 var _ fi.ModelBuilder = &IAMModelBuilder{}
+var _ fi.HasDeletions = &IAMModelBuilder{}
 
 const NodeRolePolicyTemplate = `{
   "Version": "2012-10-17",
@@ -124,26 +128,64 @@ func (b *IAMModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
+	iamSpec := b.Cluster.Spec.IAM
+	if iamSpec != nil {
+		for _, sa := range iamSpec.ServiceAccountExternalPermissions {
+			var p *iam.Policy
+			aws := sa.AWS
+			if aws.InlinePolicy != "" {
+				bp, err := b.buildPolicy(aws.InlinePolicy)
+				p = bp
+				if err != nil {
+					return fmt.Errorf("error inline policy: %w", err)
+				}
+			}
+			serviceAccount := &iam.GenericServiceAccount{
+				NamespacedName: types.NamespacedName{
+					Name:      sa.Name,
+					Namespace: sa.Namespace,
+				},
+				Policy: p,
+			}
+			iamRole, err := b.BuildServiceAccountRoleTasks(serviceAccount, c)
+			if err != nil {
+				return fmt.Errorf("error building service account role tasks: %w", err)
+			}
+			if len(aws.PolicyARNs) > 0 {
+				name := "external-" + fi.StringValue(iamRole.Name)
+				externalPolicies := aws.PolicyARNs
+				c.AddTask(&awstasks.IAMRolePolicy{
+					Name:             fi.String(name),
+					ExternalPolicies: &externalPolicies,
+					Managed:          true,
+					Role:             iamRole,
+					Lifecycle:        b.Lifecycle,
+				})
+			}
+		}
+
+	}
+
 	return nil
 }
 
 // BuildServiceAccountRoleTasks build tasks specifically for the ServiceAccount role.
-func (b *IAMModelBuilder) BuildServiceAccountRoleTasks(role iam.Subject, c *fi.ModelBuilderContext) error {
+func (b *IAMModelBuilder) BuildServiceAccountRoleTasks(role iam.Subject, c *fi.ModelBuilderContext) (*awstasks.IAMRole, error) {
 	iamName, err := b.IAMNameForServiceAccountRole(role)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	iamRole, err := b.buildIAMRole(role, iamName, c)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := b.buildIAMRolePolicy(role, iamName, iamRole, c); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return iamRole, nil
 }
 
 func (b *IAMModelBuilder) buildIAMRole(role iam.Subject, iamName string, c *fi.ModelBuilderContext) (*awstasks.IAMRole, error) {
@@ -237,15 +279,6 @@ func (b *IAMModelBuilder) roleKey(role iam.Subject) (string, bool) {
 func (b *IAMModelBuilder) buildIAMTasks(role iam.Subject, iamName string, c *fi.ModelBuilderContext, shared bool) error {
 	roleKey, _ := b.roleKey(role)
 
-	iamRole, err := b.buildIAMRole(role, iamName, c)
-	if err != nil {
-		return err
-	}
-
-	if err := b.buildIAMRolePolicy(role, iamName, iamRole, c); err != nil {
-		return err
-	}
-
 	{
 		// To minimize diff for easier code review
 
@@ -255,89 +288,108 @@ func (b *IAMModelBuilder) buildIAMTasks(role iam.Subject, iamName string, c *fi.
 				Name:      fi.String(iamName),
 				Lifecycle: b.Lifecycle,
 				Shared:    fi.Bool(shared),
-				Tags:      b.CloudTags(iamName, false),
+				Tags:      b.CloudTags(iamName, shared),
 			}
 			c.AddTask(iamInstanceProfile)
 		}
 
-		{
-			iamInstanceProfileRole := &awstasks.IAMInstanceProfileRole{
-				Name:      fi.String(iamName),
-				Lifecycle: b.Lifecycle,
-
-				InstanceProfile: iamInstanceProfile,
-				Role:            iamRole,
-			}
-			c.AddTask(iamInstanceProfileRole)
-		}
-
-		// Create External Policy tasks
 		if !shared {
-			var externalPolicies []string
 
-			if b.Cluster.Spec.ExternalPolicies != nil {
-				p := *(b.Cluster.Spec.ExternalPolicies)
-				externalPolicies = append(externalPolicies, p[roleKey]...)
-			}
-			sort.Strings(externalPolicies)
-
-			name := fmt.Sprintf("%s-policyoverride", roleKey)
-			t := &awstasks.IAMRolePolicy{
-				Name:             fi.String(name),
-				Lifecycle:        b.Lifecycle,
-				Role:             iamRole,
-				Managed:          true,
-				ExternalPolicies: &externalPolicies,
+			// Create External Policy tasks
+			iamRole, err := b.buildIAMRole(role, iamName, c)
+			if err != nil {
+				return err
 			}
 
-			c.AddTask(t)
-		}
+			{
+				if err := b.buildIAMRolePolicy(role, iamName, iamRole, c); err != nil {
+					return err
+				}
+				{
+					iamInstanceProfileRole := &awstasks.IAMInstanceProfileRole{
+						Name:      fi.String(iamName),
+						Lifecycle: b.Lifecycle,
 
-		// Generate additional policies if needed, and attach to existing role
-		if !shared {
-			additionalPolicy := ""
-			if b.Cluster.Spec.AdditionalPolicies != nil {
-				additionalPolicies := *(b.Cluster.Spec.AdditionalPolicies)
-
-				additionalPolicy = additionalPolicies[roleKey]
-			}
-
-			additionalPolicyName := "additional." + iamName
-
-			t := &awstasks.IAMRolePolicy{
-				Name:      fi.String(additionalPolicyName),
-				Lifecycle: b.Lifecycle,
-
-				Role: iamRole,
-			}
-
-			if additionalPolicy != "" {
-				p := &iam.Policy{
-					Version: iam.PolicyDefaultVersion,
+						InstanceProfile: iamInstanceProfile,
+						Role:            iamRole,
+					}
+					c.AddTask(iamInstanceProfileRole)
 				}
 
-				statements, err := iam.ParseStatements(additionalPolicy)
-				if err != nil {
-					return fmt.Errorf("additionalPolicy %q is invalid: %v", roleKey, err)
+				var externalPolicies []string
+
+				if b.Cluster.Spec.ExternalPolicies != nil {
+					p := *(b.Cluster.Spec.ExternalPolicies)
+					externalPolicies = append(externalPolicies, p[roleKey]...)
+				}
+				sort.Strings(externalPolicies)
+
+				name := fmt.Sprintf("%s-policyoverride", roleKey)
+				t := &awstasks.IAMRolePolicy{
+					Name:             fi.String(name),
+					Lifecycle:        b.Lifecycle,
+					Role:             iamRole,
+					Managed:          true,
+					ExternalPolicies: &externalPolicies,
 				}
 
-				p.Statement = append(p.Statement, statements...)
-
-				policy, err := p.AsJSON()
-				if err != nil {
-					return fmt.Errorf("error building IAM policy: %v", err)
-				}
-
-				t.PolicyDocument = fi.NewStringResource(policy)
-			} else {
-				t.PolicyDocument = fi.NewStringResource("")
+				c.AddTask(t)
 			}
 
-			c.AddTask(t)
+			// Generate additional policies if needed, and attach to existing role
+			{
+				additionalPolicy := ""
+				if b.Cluster.Spec.AdditionalPolicies != nil {
+					additionalPolicies := *(b.Cluster.Spec.AdditionalPolicies)
+
+					additionalPolicy = additionalPolicies[roleKey]
+				}
+
+				additionalPolicyName := "additional." + iamName
+
+				t := &awstasks.IAMRolePolicy{
+					Name:      fi.String(additionalPolicyName),
+					Lifecycle: b.Lifecycle,
+
+					Role: iamRole,
+				}
+
+				if additionalPolicy != "" {
+					p, err := b.buildPolicy(additionalPolicy)
+					if err != nil {
+						return fmt.Errorf("additionalPolicy %q is invalid: %v", roleKey, err)
+					}
+
+					policy, err := p.AsJSON()
+					if err != nil {
+						return fmt.Errorf("error building IAM policy: %w", err)
+					}
+
+					t.PolicyDocument = fi.NewStringResource(policy)
+				} else {
+					t.PolicyDocument = fi.NewStringResource("")
+				}
+
+				c.AddTask(t)
+			}
 		}
 	}
 
 	return nil
+}
+
+func (b *IAMModelBuilder) buildPolicy(policyString string) (*iam.Policy, error) {
+	p := &iam.Policy{
+		Version: iam.PolicyDefaultVersion,
+	}
+
+	statements, err := iam.ParseStatements(policyString)
+	if err != nil {
+		return nil, err
+	}
+
+	p.Statement = append(p.Statement, statements...)
+	return p, nil
 }
 
 // IAMServiceEC2 returns the name of the IAM service for EC2 in the current region.
@@ -358,11 +410,7 @@ func (b *IAMModelBuilder) buildAWSIAMRolePolicy(role iam.Subject) (fi.Resource, 
 	var policy string
 	serviceAccount, ok := role.ServiceAccount()
 	if ok {
-		serviceAccountIssuer, err := iam.ServiceAccountIssuer(&b.Cluster.Spec)
-		if err != nil {
-			return nil, err
-		}
-		oidcProvider := strings.TrimPrefix(serviceAccountIssuer, "https://")
+		oidcProvider := strings.TrimPrefix(*b.Cluster.Spec.KubeAPIServer.ServiceAccountIssuer, "https://")
 
 		iamPolicy := &iam.Policy{
 			Version: iam.PolicyDefaultVersion,
@@ -393,4 +441,43 @@ func (b *IAMModelBuilder) buildAWSIAMRolePolicy(role iam.Subject) (fi.Resource, 
 	}
 
 	return fi.NewStringResource(policy), nil
+}
+
+func (b *IAMModelBuilder) FindDeletions(context *fi.ModelBuilderContext, cloud fi.Cloud) error {
+	iamapi := cloud.(awsup.AWSCloud).IAM()
+	ownershipTag := "kubernetes.io/cluster/" + b.Cluster.ObjectMeta.Name
+	request := &awsIam.ListRolesInput{}
+	var getRoleErr error
+	err := iamapi.ListRolesPages(request, func(p *awsIam.ListRolesOutput, lastPage bool) bool {
+		for _, role := range p.Roles {
+			if !strings.HasSuffix(fi.StringValue(role.RoleName), "."+b.Cluster.ObjectMeta.Name) {
+				continue
+			}
+			getRequest := &awsIam.GetRoleInput{RoleName: role.RoleName}
+			roleOutput, err := iamapi.GetRole(getRequest)
+			if err != nil {
+				getRoleErr = fmt.Errorf("calling IAM GetRole on %s: %w", fi.StringValue(role.RoleName), err)
+				return false
+			}
+			for _, tag := range roleOutput.Role.Tags {
+				if fi.StringValue(tag.Key) == ownershipTag && fi.StringValue(tag.Value) == "owned" {
+					if _, ok := context.Tasks["IAMRole/"+fi.StringValue(role.RoleName)]; !ok {
+						context.AddTask(&awstasks.IAMRole{
+							ID:        role.RoleId,
+							Name:      role.RoleName,
+							Lifecycle: b.Lifecycle,
+						})
+					}
+				}
+			}
+		}
+		return true
+	})
+	if getRoleErr != nil {
+		return getRoleErr
+	}
+	if err != nil {
+		return fmt.Errorf("listing IAM roles: %w", err)
+	}
+	return nil
 }

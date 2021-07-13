@@ -47,7 +47,9 @@ spec:
 
 ## instanceMetadata
 
-By default, both IMDSv1 and IMDSv2 are enabled. The instance metadata service can be configured to allow only IMDSv2.
+By default IMDSv2 are enabled as of kOps 1.22 on new clusters using Kubernetes 1.22. The default hop limit is 3 on control plane nodes, and 1 on other roles.
+
+On other versions, you can enable IMDSv2 like this:
 
 ```YAML
 spec:
@@ -239,7 +241,7 @@ The number of Spot Instance pools across which to allocate your Spot Instances. 
 
 {{ kops_feature_table(kops_added_default='1.21') }}
 
-A Warm Pool contains pre-initialized EC2 instances that can join the cluster significantly faster than regular instances. These instances run the kOps configuration process, pull known Docker images, and then shut down. When the ASG needs to scale out it will pull instances from the warm pool if any are available.
+A Warm Pool contains pre-initialized EC2 instances that can join the cluster significantly faster than regular instances. These instances run the kOps configuration process, pull known container images, and then shut down. When the ASG needs to scale out it will pull instances from the warm pool if any are available.
 
 You can enable the warm pool by adding the following:
 

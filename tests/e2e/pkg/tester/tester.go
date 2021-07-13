@@ -157,8 +157,9 @@ func (t *Tester) addProviderFlag() error {
 	switch cluster.Spec.CloudProvider {
 	case "aws", "gce":
 		provider = cluster.Spec.CloudProvider
+	case "digitalocean":
 	default:
-		return fmt.Errorf("unhandled cluster.spec.cloudProvider %q for determining ginkgo Provider", cluster.Spec.CloudProvider)
+		klog.Warningf("unhandled cluster.spec.cloudProvider %q for determining ginkgo Provider", cluster.Spec.CloudProvider)
 	}
 
 	klog.Infof("Setting --provider=%s", provider)
@@ -223,7 +224,7 @@ func (t *Tester) addRegionFlag() error {
 	case "gce":
 		region = cluster.Spec.Subnets[0].Region
 	default:
-		return fmt.Errorf("unhandled region detection for cloud provider: %v", cluster.Spec.CloudProvider)
+		klog.Warningf("unhandled region detection for cloud provider: %v", cluster.Spec.CloudProvider)
 	}
 
 	klog.Infof("Setting --gce-region=%s", region)
@@ -295,9 +296,25 @@ func (t *Tester) getZones() ([]string, error) {
 	zoneNames := zones.List()
 
 	if len(zoneNames) == 0 {
-		return nil, fmt.Errorf("no zones found in instance groups")
+		klog.Warningf("no zones found in instance groups")
+		return nil, nil
 	}
 	return zoneNames, nil
+}
+
+func (t *Tester) addNodeOSArchFlag() error {
+	igs, err := t.getKopsInstanceGroups()
+	if err != nil {
+		return err
+	}
+	for _, ig := range igs {
+		if strings.Contains(ig.Spec.Image, "arm64") {
+			klog.Info("Setting --node-os-arch=arm64")
+			t.TestArgs += " --node-os-arch=arm64"
+			break
+		}
+	}
+	return nil
 }
 
 func (t *Tester) execute() error {
@@ -346,6 +363,14 @@ func (t *Tester) execute() error {
 	}
 
 	if err := t.addProjectFlag(); err != nil {
+		return err
+	}
+
+	if err := t.setSkipRegexFlag(); err != nil {
+		return err
+	}
+
+	if err := t.addNodeOSArchFlag(); err != nil {
 		return err
 	}
 

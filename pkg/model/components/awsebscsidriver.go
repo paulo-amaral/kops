@@ -31,13 +31,24 @@ var _ loader.OptionsBuilder = &AWSEBSCSIDriverOptionsBuilder{}
 
 func (b *AWSEBSCSIDriverOptionsBuilder) BuildOptions(o interface{}) error {
 	clusterSpec := o.(*kops.ClusterSpec)
-	c := clusterSpec.CloudConfig.AWSEBSCSIDriver
-	if c == nil {
+	if kops.CloudProviderID(clusterSpec.CloudProvider) != kops.CloudProviderAWS {
+		return nil
+	}
+
+	cc := clusterSpec.CloudConfig
+	if cc.AWSEBSCSIDriver == nil {
+		cc.AWSEBSCSIDriver = &kops.AWSEBSCSIDriver{
+			Enabled: fi.Bool(b.IsKubernetesGTE("1.22")),
+		}
+	}
+	c := cc.AWSEBSCSIDriver
+
+	if !fi.BoolValue(c.Enabled) {
 		return nil
 	}
 
 	if c.Version == nil {
-		version := "v0.10.1"
+		version := "v1.1.0"
 		c.Version = fi.String(version)
 	}
 

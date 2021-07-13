@@ -13,7 +13,6 @@ spec:
     gceServiceAccount: default
   cloudProvider: gce
   configBase: memfs://tests/ha-gce.example.com
-  containerRuntime: containerd
   etcdClusters:
   - cpuRequest: 200m
     etcdMembers:
@@ -42,6 +41,7 @@ spec:
     anonymousAuth: false
   kubernetesApiAccess:
   - 0.0.0.0/0
+  - ::/0
   kubernetesVersion: v1.21.0
   masterPublicName: api.ha-gce.example.com
   networking:
@@ -50,6 +50,7 @@ spec:
   project: testproject
   sshAccess:
   - 0.0.0.0/0
+  - ::/0
   subnets:
   - name: us-test1
     region: us-test1

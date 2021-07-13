@@ -45,6 +45,10 @@ type KubeletConfigSpec struct {
 	KubeconfigPath string `json:"kubeconfigPath,omitempty" flag:"kubeconfig"`
 	// RequireKubeconfig indicates a kubeconfig is required
 	RequireKubeconfig *bool `json:"requireKubeconfig,omitempty" flag:"require-kubeconfig"`
+	// LogFormat is the logging format of the kubelet.
+	// Supported values: text, json.
+	// Default: text
+	LogFormat string `json:"logFormat,omitempty" flag:"logging-format" flag-empty:"text"`
 	// LogLevel is the logging level of the kubelet
 	LogLevel *int32 `json:"logLevel,omitempty" flag:"v" flag-empty:"0"`
 	// config is the path to the config file or directory of files
@@ -217,6 +221,8 @@ type KubeletConfigSpec struct {
 	ContainerLogMaxFiles *int32 `json:"containerLogMaxFiles,omitempty" flag:"container-log-max-files"`
 	// EnableCadvisorJsonEndpoints enables cAdvisor json `/spec` and `/stats/*` endpoints. Defaults to False.
 	EnableCadvisorJsonEndpoints *bool `json:"enableCadvisorJsonEndpoints,omitempty" flag:"enable-cadvisor-json-endpoints"`
+	// PodPidsLimit is the maximum number of pids in any pod.
+	PodPidsLimit *int64 `json:"podPidsLimit,omitempty" flag:"pod-max-pids"`
 }
 
 // KubeProxyConfig defines the configuration for a proxy
@@ -269,6 +275,10 @@ type KubeAPIServerConfig struct {
 	Image string `json:"image,omitempty"`
 	// DisableBasicAuth removes the --basic-auth-file flag
 	DisableBasicAuth *bool `json:"disableBasicAuth,omitempty"`
+	// LogFormat is the logging format of the api.
+	// Supported values: text, json.
+	// Default: text
+	LogFormat string `json:"logFormat,omitempty" flag:"logging-format" flag-empty:"text"`
 	// LogLevel is the logging level of the api
 	LogLevel int32 `json:"logLevel,omitempty" flag:"v" flag-empty:"0"`
 	// CloudProvider is the name of the cloudProvider we are using, aws, gce etcd
@@ -511,6 +521,10 @@ type KubeAPIServerConfig struct {
 type KubeControllerManagerConfig struct {
 	// Master is the url for the kube api master
 	Master string `json:"master,omitempty" flag:"master"`
+	// LogFormat is the logging format of the controler manager.
+	// Supported values: text, json.
+	// Default: text
+	LogFormat string `json:"logFormat,omitempty" flag:"logging-format" flag-empty:"text"`
 	// LogLevel is the defined logLevel
 	LogLevel int32 `json:"logLevel,omitempty" flag:"v" flag-empty:"0"`
 	// ServiceAccountPrivateKeyFile is the location of the private key for service account token signing.
@@ -662,6 +676,10 @@ type CloudControllerManagerConfig struct {
 type KubeSchedulerConfig struct {
 	// Master is a url to the kube master
 	Master string `json:"master,omitempty" flag:"master"`
+	// LogFormat is the logging format of the scheduler.
+	// Supported values: text, json.
+	// Default: text
+	LogFormat string `json:"logFormat,omitempty" flag:"logging-format" flag-empty:"text"`
 	// LogLevel is the logging level
 	LogLevel int32 `json:"logLevel,omitempty" flag:"v"`
 	// Image is the docker image to use
@@ -850,6 +868,14 @@ type AWSEBSCSIDriver struct {
 	VolumeAttachLimit *int `json:"volumeAttachLimit,omitempty"`
 }
 
+// SnapshotControllerConfig is the config for the CSI Snapshot Controller
+type SnapshotControllerConfig struct {
+	//Enabled enables the CSI Snapshot Controller
+	Enabled *bool `json:"enabled,omitempty"`
+	//InstallDefaultClass will install the default VolumeSnapshotClass
+	InstallDefaultClass bool `json:"installDefaultClass,omitempty"`
+}
+
 // NodeTerminationHandlerConfig determines the node termination handler configuration.
 type NodeTerminationHandlerConfig struct {
 	// Enabled enables the node termination handler.
@@ -877,6 +903,28 @@ type NodeTerminationHandlerConfig struct {
 	// CPURequest of NodeTerminationHandler container.
 	// Default: 50m
 	CPURequest *resource.Quantity `json:"cpuRequest,omitempty"`
+}
+
+// NodeProblemDetector determines the node problem detector configuration.
+type NodeProblemDetectorConfig struct {
+	// Enabled enables the NodeProblemDetector.
+	// Default: false
+	Enabled *bool `json:"enabled,omitempty"`
+	// Image is the NodeProblemDetector docker container used.
+	Image *string `json:"image,omitempty"`
+
+	// MemoryRequest of NodeProblemDetector container.
+	// Default: 80Mi
+	MemoryRequest *resource.Quantity `json:"memoryRequest,omitempty"`
+	// CPURequest of NodeProblemDetector container.
+	// Default: 10m
+	CPURequest *resource.Quantity `json:"cpuRequest,omitempty"`
+	// MemoryLimit of NodeProblemDetector container.
+	// Default: 80Mi
+	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
+	// CPULimit of NodeProblemDetector container.
+	// Default: 10m
+	CPULimit *resource.Quantity `json:"cpuLimit,omitempty"`
 }
 
 // ClusterAutoscalerConfig determines the cluster autoscaler configuration.

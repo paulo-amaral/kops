@@ -211,6 +211,45 @@ roleRef:
   name: ebs-external-snapshotter-role
   apiGroup: rbac.authorization.k8s.io
 ---
+# Source: aws-ebs-csi-driver/templates/clusterrolebinding-csi-node.yaml
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ebs-csi-node-getter-binding
+  labels:
+    app.kubernetes.io/name: aws-ebs-csi-driver
+subjects:
+  - kind: ServiceAccount
+    name: ebs-csi-node-sa
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: ebs-csi-node-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: aws-ebs-csi-driver/templates/clusterrole-csi-node.yaml
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ebs-csi-node-role
+  labels:
+    app.kubernetes.io/name: aws-ebs-csi-driver
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+# Source: aws-ebs-csi-driver/templates/serviceaccount-csi-node.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ebs-csi-node-sa
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: aws-ebs-csi-driver
+    app.kubernetes.io/instance: aws-ebs-csi-driver
+    app.kubernetes.io/version: {{ .Version }}
+---
 # Source: aws-ebs-csi-driver/templates/node.yaml
 # Node Service
 kind: DaemonSet
@@ -239,6 +278,7 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
       hostNetwork: true
+      serviceAccountName: ebs-csi-node-sa
       priorityClassName: system-node-critical
       tolerations:
         - operator: Exists
@@ -254,10 +294,14 @@ spec:
             - --volume-attach-limit={{ .VolumeAttachLimit }}
             {{- end }}
             - --logtostderr
-            - --v=5
+            - --v=2
           env:
             - name: CSI_ENDPOINT
               value: unix:/csi/csi.sock
+            - name: CSI_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           volumeMounts:
             - name: kubelet-dir
               mountPath: /var/lib/kubelet
@@ -299,7 +343,7 @@ spec:
             - name: registration-dir
               mountPath: /registration
         - name: liveness-probe
-          image: quay.io/k8scsi/livenessprobe:v2.2.0
+          image: k8s.gcr.io/sig-storage/livenessprobe:v2.2.0
           args:
             - --csi-address=/csi/csi.sock
           volumeMounts:
@@ -335,7 +379,7 @@ metadata:
     app.kubernetes.io/instance: aws-ebs-csi-driver
     app.kubernetes.io/version: {{ .Version }}
 spec:
-  replicas: 2
+  replicas: {{ ControlPlaneControllerReplicas }}
   selector:
     matchLabels:
       app: ebs-csi-controller
@@ -349,13 +393,37 @@ spec:
         app.kubernetes.io/instance: aws-ebs-csi-driver
         app.kubernetes.io/version: {{ .Version }}
     spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - ebs-csi-controller
+            topologyKey: kubernetes.com/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100 
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - ebs-csi-controller
+              topologyKey: topology.kubernetes.io/zone
       nodeSelector:
         kubernetes.io/os: linux
+        {{ if not UseServiceAccountIAM }}
         node-role.kubernetes.io/master: ""
+        {{ end }}
       serviceAccountName: ebs-csi-controller-sa
       priorityClassName: system-cluster-critical
+      {{ if not UseServiceAccountIAM }}
       tolerations:
         - operator: Exists
+      {{ end }}
       containers:
         - name: ebs-plugin
           image: k8s.gcr.io/provider-aws/aws-ebs-csi-driver:{{ .Version }}
@@ -365,9 +433,14 @@ spec:
             - --endpoint=$(CSI_ENDPOINT)
             - --logtostderr
             - --k8s-tag-cluster-id={{ ClusterName }}
-            - --extra-tags={{ CsiExtraTags }}
+            - "--extra-tags={{ CloudLabels }}"
             - --v=5
           env:
+            - name: CSI_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
             - name: CSI_ENDPOINT
               value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
             - name: AWS_ACCESS_KEY_ID
@@ -405,6 +478,7 @@ spec:
             - --feature-gates=Topology=true
             - --leader-election=true
             - --extra-create-metadata=true
+            - --default-fstype=ext4
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock
@@ -469,4 +543,19 @@ metadata:
 spec:
   attachRequired: true
   podInfoOnMount: false
+---
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: ebs-csi-controller
+  labels:
+    app.kubernetes.io/name: aws-ebs-csi-driver
+    app.kubernetes.io/instance: aws-ebs-csi-driver
+    app.kubernetes.io/version: {{ .Version }}
+spec:
+  selector:
+    matchLabels:
+      app: ebs-csi-controller
+      app.kubernetes.io/instance: aws-ebs-csi-driver
+  maxUnavailable: 1
 {{ end }}

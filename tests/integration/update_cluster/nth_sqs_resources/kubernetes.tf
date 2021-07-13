@@ -86,10 +86,11 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-nthsqsresources-exam
     id      = aws_launch_template.master-us-test-1a-masters-nthsqsresources-example-com.id
     version = aws_launch_template.master-us-test-1a-masters-nthsqsresources-example-com.latest_version
   }
-  max_size            = 1
-  metrics_granularity = "1Minute"
-  min_size            = 1
-  name                = "master-us-test-1a.masters.nthsqsresources.example.com"
+  max_size              = 1
+  metrics_granularity   = "1Minute"
+  min_size              = 1
+  name                  = "master-us-test-1a.masters.nthsqsresources.example.com"
+  protect_from_scale_in = false
   tag {
     key                 = "KubernetesCluster"
     propagate_at_launch = true
@@ -154,10 +155,11 @@ resource "aws_autoscaling_group" "nodes-nthsqsresources-example-com" {
     id      = aws_launch_template.nodes-nthsqsresources-example-com.id
     version = aws_launch_template.nodes-nthsqsresources-example-com.latest_version
   }
-  max_size            = 2
-  metrics_granularity = "1Minute"
-  min_size            = 2
-  name                = "nodes.nthsqsresources.example.com"
+  max_size              = 2
+  metrics_granularity   = "1Minute"
+  min_size              = 2
+  name                  = "nodes.nthsqsresources.example.com"
+  protect_from_scale_in = false
   tag {
     key                 = "KubernetesCluster"
     propagate_at_launch = true
@@ -314,18 +316,6 @@ resource "aws_iam_instance_profile" "nodes-nthsqsresources-example-com" {
   }
 }
 
-resource "aws_iam_role_policy" "masters-nthsqsresources-example-com" {
-  name   = "masters.nthsqsresources.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_masters.nthsqsresources.example.com_policy")
-  role   = aws_iam_role.masters-nthsqsresources-example-com.name
-}
-
-resource "aws_iam_role_policy" "nodes-nthsqsresources-example-com" {
-  name   = "nodes.nthsqsresources.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.nthsqsresources.example.com_policy")
-  role   = aws_iam_role.nodes-nthsqsresources-example-com.name
-}
-
 resource "aws_iam_role" "masters-nthsqsresources-example-com" {
   assume_role_policy = file("${path.module}/data/aws_iam_role_masters.nthsqsresources.example.com_policy")
   name               = "masters.nthsqsresources.example.com"
@@ -344,6 +334,18 @@ resource "aws_iam_role" "nodes-nthsqsresources-example-com" {
     "Name"                                              = "nodes.nthsqsresources.example.com"
     "kubernetes.io/cluster/nthsqsresources.example.com" = "owned"
   }
+}
+
+resource "aws_iam_role_policy" "masters-nthsqsresources-example-com" {
+  name   = "masters.nthsqsresources.example.com"
+  policy = file("${path.module}/data/aws_iam_role_policy_masters.nthsqsresources.example.com_policy")
+  role   = aws_iam_role.masters-nthsqsresources-example-com.name
+}
+
+resource "aws_iam_role_policy" "nodes-nthsqsresources-example-com" {
+  name   = "nodes.nthsqsresources.example.com"
+  policy = file("${path.module}/data/aws_iam_role_policy_nodes.nthsqsresources.example.com_policy")
+  role   = aws_iam_role.nodes-nthsqsresources-example-com.name
 }
 
 resource "aws_internet_gateway" "nthsqsresources-example-com" {
@@ -395,10 +397,14 @@ resource "aws_launch_template" "master-us-test-1a-masters-nthsqsresources-exampl
     http_put_response_hop_limit = 1
     http_tokens                 = "optional"
   }
+  monitoring {
+    enabled = false
+  }
   name = "master-us-test-1a.masters.nthsqsresources.example.com"
   network_interfaces {
     associate_public_ip_address = true
     delete_on_termination       = true
+    ipv6_address_count          = 0
     security_groups             = [aws_security_group.masters-nthsqsresources-example-com.id]
   }
   tag_specifications {
@@ -475,10 +481,14 @@ resource "aws_launch_template" "nodes-nthsqsresources-example-com" {
     http_put_response_hop_limit = 1
     http_tokens                 = "optional"
   }
+  monitoring {
+    enabled = false
+  }
   name = "nodes.nthsqsresources.example.com"
   network_interfaces {
     associate_public_ip_address = true
     delete_on_termination       = true
+    ipv6_address_count          = 0
     security_groups             = [aws_security_group.nodes-nthsqsresources-example-com.id]
   }
   tag_specifications {
@@ -520,9 +530,16 @@ resource "aws_launch_template" "nodes-nthsqsresources-example-com" {
   user_data = filebase64("${path.module}/data/aws_launch_template_nodes.nthsqsresources.example.com_user_data")
 }
 
-resource "aws_route_table_association" "us-test-1a-nthsqsresources-example-com" {
-  route_table_id = aws_route_table.nthsqsresources-example-com.id
-  subnet_id      = aws_subnet.us-test-1a-nthsqsresources-example-com.id
+resource "aws_route" "route-0-0-0-0--0" {
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.nthsqsresources-example-com.id
+  route_table_id         = aws_route_table.nthsqsresources-example-com.id
+}
+
+resource "aws_route" "route-__--0" {
+  destination_ipv6_cidr_block = "::/0"
+  gateway_id                  = aws_internet_gateway.nthsqsresources-example-com.id
+  route_table_id              = aws_route_table.nthsqsresources-example-com.id
 }
 
 resource "aws_route_table" "nthsqsresources-example-com" {
@@ -535,10 +552,157 @@ resource "aws_route_table" "nthsqsresources-example-com" {
   vpc_id = aws_vpc.nthsqsresources-example-com.id
 }
 
-resource "aws_route" "route-0-0-0-0--0" {
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.nthsqsresources-example-com.id
-  route_table_id         = aws_route_table.nthsqsresources-example-com.id
+resource "aws_route_table_association" "us-test-1a-nthsqsresources-example-com" {
+  route_table_id = aws_route_table.nthsqsresources-example-com.id
+  subnet_id      = aws_subnet.us-test-1a-nthsqsresources-example-com.id
+}
+
+resource "aws_s3_bucket_object" "cluster-completed-spec" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_cluster-completed.spec_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/cluster-completed.spec"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "etcd-cluster-spec-events" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_etcd-cluster-spec-events_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/backups/etcd/events/control/etcd-cluster-spec"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "etcd-cluster-spec-main" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_etcd-cluster-spec-main_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/backups/etcd/main/control/etcd-cluster-spec"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "kops-version-txt" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_kops-version.txt_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/kops-version.txt"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "manifests-etcdmanager-events" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_manifests-etcdmanager-events_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/manifests/etcd/events.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "manifests-etcdmanager-main" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_manifests-etcdmanager-main_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/manifests/etcd/main.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "manifests-static-kube-apiserver-healthcheck" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_manifests-static-kube-apiserver-healthcheck_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/manifests/static/kube-apiserver-healthcheck.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nodeupconfig-master-us-test-1a" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nodeupconfig-master-us-test-1a_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/igconfig/master/master-us-test-1a/nodeupconfig.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nodeupconfig-nodes" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nodeupconfig-nodes_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/igconfig/node/nodes/nodeupconfig.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-bootstrap" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-bootstrap_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/bootstrap-channel.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-core-addons-k8s-io" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-core.addons.k8s.io_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/core.addons.k8s.io/v1.4.0.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-coredns-addons-k8s-io-k8s-1-12" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-coredns.addons.k8s.io-k8s-1.12_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/coredns.addons.k8s.io/k8s-1.12.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-dns-controller-addons-k8s-io-k8s-1-12" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-dns-controller.addons.k8s.io-k8s-1.12_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/dns-controller.addons.k8s.io/k8s-1.12.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-kops-controller-addons-k8s-io-k8s-1-16" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-kops-controller.addons.k8s.io-k8s-1.16_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/kops-controller.addons.k8s.io/k8s-1.16.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-kubelet-api-rbac-addons-k8s-io-k8s-1-9" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-kubelet-api.rbac.addons.k8s.io-k8s-1.9_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/kubelet-api.rbac.addons.k8s.io/k8s-1.9.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-limit-range-addons-k8s-io" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-limit-range.addons.k8s.io_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/limit-range.addons.k8s.io/v1.5.0.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-node-termination-handler-aws-k8s-1-11" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-node-termination-handler.aws-k8s-1.11_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/node-termination-handler.aws/k8s-1.11.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_bucket_object" "nthsqsresources-example-com-addons-storage-aws-addons-k8s-io-v1-15-0" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_bucket_object_nthsqsresources.example.com-addons-storage-aws.addons.k8s.io-v1.15.0_content")
+  key                    = "clusters.example.com/nthsqsresources.example.com/addons/storage-aws.addons.k8s.io/v1.15.0.yaml"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_security_group" "masters-nthsqsresources-example-com" {
+  description = "Security group for masters"
+  name        = "masters.nthsqsresources.example.com"
+  tags = {
+    "KubernetesCluster"                                 = "nthsqsresources.example.com"
+    "Name"                                              = "masters.nthsqsresources.example.com"
+    "kubernetes.io/cluster/nthsqsresources.example.com" = "owned"
+  }
+  vpc_id = aws_vpc.nthsqsresources-example-com.id
+}
+
+resource "aws_security_group" "nodes-nthsqsresources-example-com" {
+  description = "Security group for nodes"
+  name        = "nodes.nthsqsresources.example.com"
+  tags = {
+    "KubernetesCluster"                                 = "nthsqsresources.example.com"
+    "Name"                                              = "nodes.nthsqsresources.example.com"
+    "kubernetes.io/cluster/nthsqsresources.example.com" = "owned"
+  }
+  vpc_id = aws_vpc.nthsqsresources-example-com.id
 }
 
 resource "aws_security_group_rule" "from-0-0-0-0--0-ingress-tcp-22to22-masters-nthsqsresources-example-com" {
@@ -577,6 +741,15 @@ resource "aws_security_group_rule" "from-masters-nthsqsresources-example-com-egr
   type              = "egress"
 }
 
+resource "aws_security_group_rule" "from-masters-nthsqsresources-example-com-egress-all-0to0-__--0" {
+  from_port         = 0
+  ipv6_cidr_blocks  = ["::/0"]
+  protocol          = "-1"
+  security_group_id = aws_security_group.masters-nthsqsresources-example-com.id
+  to_port           = 0
+  type              = "egress"
+}
+
 resource "aws_security_group_rule" "from-masters-nthsqsresources-example-com-ingress-all-0to0-masters-nthsqsresources-example-com" {
   from_port                = 0
   protocol                 = "-1"
@@ -598,6 +771,15 @@ resource "aws_security_group_rule" "from-masters-nthsqsresources-example-com-ing
 resource "aws_security_group_rule" "from-nodes-nthsqsresources-example-com-egress-all-0to0-0-0-0-0--0" {
   cidr_blocks       = ["0.0.0.0/0"]
   from_port         = 0
+  protocol          = "-1"
+  security_group_id = aws_security_group.nodes-nthsqsresources-example-com.id
+  to_port           = 0
+  type              = "egress"
+}
+
+resource "aws_security_group_rule" "from-nodes-nthsqsresources-example-com-egress-all-0to0-__--0" {
+  from_port         = 0
+  ipv6_cidr_blocks  = ["::/0"]
   protocol          = "-1"
   security_group_id = aws_security_group.nodes-nthsqsresources-example-com.id
   to_port           = 0
@@ -649,28 +831,6 @@ resource "aws_security_group_rule" "from-nodes-nthsqsresources-example-com-ingre
   type                     = "ingress"
 }
 
-resource "aws_security_group" "masters-nthsqsresources-example-com" {
-  description = "Security group for masters"
-  name        = "masters.nthsqsresources.example.com"
-  tags = {
-    "KubernetesCluster"                                 = "nthsqsresources.example.com"
-    "Name"                                              = "masters.nthsqsresources.example.com"
-    "kubernetes.io/cluster/nthsqsresources.example.com" = "owned"
-  }
-  vpc_id = aws_vpc.nthsqsresources-example-com.id
-}
-
-resource "aws_security_group" "nodes-nthsqsresources-example-com" {
-  description = "Security group for nodes"
-  name        = "nodes.nthsqsresources.example.com"
-  tags = {
-    "KubernetesCluster"                                 = "nthsqsresources.example.com"
-    "Name"                                              = "nodes.nthsqsresources.example.com"
-    "kubernetes.io/cluster/nthsqsresources.example.com" = "owned"
-  }
-  vpc_id = aws_vpc.nthsqsresources-example-com.id
-}
-
 resource "aws_sqs_queue" "nthsqsresources-example-com-nth" {
   message_retention_seconds = 300
   name                      = "nthsqsresources-example-com-nth"
@@ -691,13 +851,21 @@ resource "aws_subnet" "us-test-1a-nthsqsresources-example-com" {
     "SubnetType"                                        = "Public"
     "kubernetes.io/cluster/nthsqsresources.example.com" = "owned"
     "kubernetes.io/role/elb"                            = "1"
+    "kubernetes.io/role/internal-elb"                   = "1"
   }
   vpc_id = aws_vpc.nthsqsresources-example-com.id
 }
 
-resource "aws_vpc_dhcp_options_association" "nthsqsresources-example-com" {
-  dhcp_options_id = aws_vpc_dhcp_options.nthsqsresources-example-com.id
-  vpc_id          = aws_vpc.nthsqsresources-example-com.id
+resource "aws_vpc" "nthsqsresources-example-com" {
+  assign_generated_ipv6_cidr_block = true
+  cidr_block                       = "172.20.0.0/16"
+  enable_dns_hostnames             = true
+  enable_dns_support               = true
+  tags = {
+    "KubernetesCluster"                                 = "nthsqsresources.example.com"
+    "Name"                                              = "nthsqsresources.example.com"
+    "kubernetes.io/cluster/nthsqsresources.example.com" = "owned"
+  }
 }
 
 resource "aws_vpc_dhcp_options" "nthsqsresources-example-com" {
@@ -710,15 +878,9 @@ resource "aws_vpc_dhcp_options" "nthsqsresources-example-com" {
   }
 }
 
-resource "aws_vpc" "nthsqsresources-example-com" {
-  cidr_block           = "172.20.0.0/16"
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-  tags = {
-    "KubernetesCluster"                                 = "nthsqsresources.example.com"
-    "Name"                                              = "nthsqsresources.example.com"
-    "kubernetes.io/cluster/nthsqsresources.example.com" = "owned"
-  }
+resource "aws_vpc_dhcp_options_association" "nthsqsresources-example-com" {
+  dhcp_options_id = aws_vpc_dhcp_options.nthsqsresources-example-com.id
+  vpc_id          = aws_vpc.nthsqsresources-example-com.id
 }
 
 terraform {

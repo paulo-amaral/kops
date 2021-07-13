@@ -306,10 +306,6 @@ func (b *KubeletBuilder) buildSystemdService() *nodetasks.Service {
 
 // buildKubeletConfig is responsible for creating the kubelet configuration
 func (b *KubeletBuilder) buildKubeletConfig() (*kops.KubeletConfigSpec, error) {
-	if b.InstanceGroup == nil {
-		klog.Fatalf("InstanceGroup was not set")
-	}
-
 	kubeletConfigSpec, err := b.buildKubeletConfigSpec()
 	if err != nil {
 		return nil, fmt.Errorf("error building kubelet config: %v", err)
@@ -429,7 +425,7 @@ func (b *KubeletBuilder) addContainerizedMounter(c *fi.ModelBuilderContext) erro
 // buildKubeletConfigSpec returns the kubeletconfig for the specified instanceGroup
 func (b *KubeletBuilder) buildKubeletConfigSpec() (*kops.KubeletConfigSpec, error) {
 	isMaster := b.IsMaster
-	isAPIServer := b.InstanceGroup.Spec.Role == kops.InstanceGroupRoleAPIServer
+	isAPIServer := b.BootConfig.InstanceGroupRole == kops.InstanceGroupRoleAPIServer
 
 	// Merge KubeletConfig for NodeLabels
 	c := b.NodeupConfig.KubeletConfig
@@ -524,9 +520,7 @@ func (b *KubeletBuilder) buildKubeletConfigSpec() (*kops.KubeletConfigSpec, erro
 	// As of 1.16 we can no longer set critical labels.
 	// kops-controller will set these labels.
 	// For bootstrapping reasons, protokube sets the critical labels for kops-controller to run.
-	if b.Cluster.IsKubernetesGTE("1.16") {
-		c.NodeLabels = nil
-	}
+	c.NodeLabels = nil
 
 	if c.AuthorizationMode == "" && b.Cluster.IsKubernetesGTE("1.19") {
 		c.AuthorizationMode = "Webhook"
@@ -558,7 +552,6 @@ func (b *KubeletBuilder) buildKubeletServingCertificate(c *fi.ModelBuilderContex
 	if b.UseKopsControllerForNodeBootstrap() {
 		name := "kubelet-server"
 		dir := b.PathSrvKubernetes()
-		signer := fi.CertificateIDCA
 
 		nodeName, err := b.NodeName()
 		if err != nil {
@@ -586,9 +579,10 @@ func (b *KubeletBuilder) buildKubeletServingCertificate(c *fi.ModelBuilderContex
 
 		} else {
 			issueCert := &nodetasks.IssueCert{
-				Name:   name,
-				Signer: signer,
-				Type:   "server",
+				Name:      name,
+				Signer:    fi.CertificateIDCA,
+				KeypairID: b.NodeupConfig.KeypairIDs[fi.CertificateIDCA],
+				Type:      "server",
 				Subject: nodetasks.PKIXName{
 					CommonName: nodeName,
 				},

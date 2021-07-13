@@ -35,12 +35,12 @@ type keystoreEntry struct {
 
 var _ pki.Keystore = keystore{}
 
-func (k keystore) FindKeypair(name string) (*pki.Certificate, *pki.PrivateKey, bool, error) {
+func (k keystore) FindPrimaryKeypair(name string) (*pki.Certificate, *pki.PrivateKey, error) {
 	entry, ok := k.keys[name]
 	if !ok {
-		return nil, nil, false, fmt.Errorf("unknown CA %q", name)
+		return nil, nil, fmt.Errorf("unknown CA %q", name)
 	}
-	return entry.certificate, entry.key, false, nil
+	return entry.certificate, entry.key, nil
 }
 
 func newKeystore(basePath string, cas []string) (pki.Keystore, error) {
@@ -48,7 +48,7 @@ func newKeystore(basePath string, cas []string) (pki.Keystore, error) {
 		keys: map[string]keystoreEntry{},
 	}
 	for _, name := range cas {
-		certBytes, err := ioutil.ReadFile(path.Join(basePath, name+".pem"))
+		certBytes, err := ioutil.ReadFile(path.Join(basePath, name+".crt"))
 		if err != nil {
 			return nil, fmt.Errorf("reading %q certificate: %v", name, err)
 		}
@@ -57,7 +57,7 @@ func newKeystore(basePath string, cas []string) (pki.Keystore, error) {
 			return nil, fmt.Errorf("parsing %q certificate: %v", name, err)
 		}
 
-		keyBytes, err := ioutil.ReadFile(path.Join(basePath, name+"-key.pem"))
+		keyBytes, err := ioutil.ReadFile(path.Join(basePath, name+".key"))
 		if err != nil {
 			return nil, fmt.Errorf("reading %q key: %v", name, err)
 		}

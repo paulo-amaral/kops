@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/kops/pkg/apis/kops/util"
+	"k8s.io/kops/upup/pkg/fi/utils"
 )
 
 // +genclient
@@ -161,6 +162,8 @@ type ClusterSpec struct {
 
 	// NodeTerminationHandler determines the node termination handler configuration.
 	NodeTerminationHandler *NodeTerminationHandlerConfig `json:"nodeTerminationHandler,omitempty"`
+	// NodeProblemDetector determines the node problem detector configuration.
+	NodeProblemDetector *NodeProblemDetectorConfig `json:"nodeProblemDetector,omitempty"`
 	// MetricsServer determines the metrics server configuration.
 	MetricsServer *MetricsServerConfig `json:"metricsServer,omitempty"`
 	// CertManager determines the metrics server configuration.
@@ -208,6 +211,9 @@ type ClusterSpec struct {
 
 	// ServiceAccountIssuerDiscovery configures the OIDC Issuer for ServiceAccounts.
 	ServiceAccountIssuerDiscovery *ServiceAccountIssuerDiscoveryConfig `json:"serviceAccountIssuerDiscovery,omitempty"`
+
+	// SnapshotController defines the CSI Snapshot Controller configuration.
+	SnapshotController *SnapshotControllerConfig `json:"snapshotController,omitempty"`
 }
 
 // ServiceAccountIssuerDiscoveryConfig configures an OIDC Issuer.
@@ -216,6 +222,24 @@ type ServiceAccountIssuerDiscoveryConfig struct {
 	DiscoveryStore string `json:"discoveryStore,omitempty"`
 	// EnableAWSOIDCProvider will provision an AWS OIDC provider that trusts the ServiceAccount Issuer
 	EnableAWSOIDCProvider bool `json:"enableAWSOIDCProvider,omitempty"`
+}
+
+// ServiceAccountExternalPermissions grants a ServiceAccount permissions to external resources.
+type ServiceAccountExternalPermission struct {
+	// Name is the name of the Kubernetes ServiceAccount.
+	Name string `json:"name"`
+	// Namespace is the namespace of the Kubernetes ServiceAccount.
+	Namespace string `json:"namespace"`
+	// AWS grants permissions to AWS resources.
+	AWS *AWSPermission `json:"aws,omitempty"`
+}
+
+// AWSPermission grants permissions to AWS resources.
+type AWSPermission struct {
+	// PolicyARNs is a list of existing IAM Policies.
+	PolicyARNs []string `json:"policyARNs,omitempty"`
+	// InlinePolicy is an IAM Policy that will be attached inline to the IAM Role.
+	InlinePolicy string `json:"inlinePolicy,omitempty"`
 }
 
 // NodeAuthorizationSpec is used to node authorization
@@ -280,6 +304,8 @@ type IAMSpec struct {
 	Legacy                 bool    `json:"legacy"`
 	AllowContainerRegistry bool    `json:"allowContainerRegistry,omitempty"`
 	PermissionsBoundary    *string `json:"permissionsBoundary,omitempty"`
+	// ServiceAccountExternalPermissions defines the relatinship between Kubernetes ServiceAccounts and permissions with external resources.
+	ServiceAccountExternalPermissions []ServiceAccountExternalPermission `json:"serviceAccountExternalPermissions,omitempty"`
 }
 
 // HookSpec is a definition hook
@@ -601,8 +627,10 @@ const (
 type ClusterSubnetSpec struct {
 	// Name is the name of the subnet
 	Name string `json:"name,omitempty"`
-	// CIDR is the network cidr of the subnet
+	// CIDR is the IPv4 CIDR block assigned to the subnet.
 	CIDR string `json:"cidr,omitempty"`
+	// IPv6CIDR is the IPv6 CIDR block assigned to the subnet.
+	IPv6CIDR string `json:"ipv6CIDR,omitempty"`
 	// Zone is the zone the subnet is in, set for subnets that are zonally scoped
 	Zone string `json:"zone,omitempty"`
 	// Region is the region the subnet is in, set for subnets that are regionally scoped
@@ -766,6 +794,10 @@ func (c *Cluster) AzureResourceGroupName() string {
 // IsSharedAzureRouteTable returns true if the route table is shared.
 func (c *Cluster) IsSharedAzureRouteTable() bool {
 	return c.Spec.CloudConfig.Azure.RouteTableName != ""
+}
+
+func (c *ClusterSpec) IsIPv6Only() bool {
+	return utils.IsIPv6CIDR(c.NonMasqueradeCIDR)
 }
 
 // EnvVar represents an environment variable present in a Container.

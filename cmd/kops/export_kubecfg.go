@@ -27,8 +27,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kops/cmd/kops/util"
 	kopsapi "k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/commands"
+	"k8s.io/kops/pkg/commands/commandutils"
 	"k8s.io/kops/pkg/kubeconfig"
+	"k8s.io/kops/upup/pkg/fi/cloudup"
 	"k8s.io/kubectl/pkg/util/i18n"
 	"k8s.io/kubectl/pkg/util/templates"
 )
@@ -139,11 +140,15 @@ func RunExportKubecfg(ctx context.Context, f *util.Factory, out io.Writer, optio
 			return err
 		}
 
+		cloud, err := cloudup.BuildCloud(cluster)
+		if err != nil {
+			return err
+		}
 		conf, err := kubeconfig.BuildKubecfg(
 			cluster,
 			keyStore,
 			secretStore,
-			&commands.CloudDiscoveryStatusStore{},
+			cloud,
 			options.admin,
 			options.user,
 			options.internal,
@@ -171,4 +176,20 @@ func buildPathOptions(options *ExportKubecfgOptions) *clientcmd.PathOptions {
 	}
 
 	return pathOptions
+}
+
+func completeKubecfgUser(cmd *cobra.Command, args []string, complete string) ([]string, cobra.ShellCompDirective) {
+	pathOptions := clientcmd.NewDefaultPathOptions()
+
+	config, err := pathOptions.GetStartingConfig()
+	if err != nil {
+		return commandutils.CompletionError("reading kubeconfig", err)
+	}
+
+	var users []string
+	for user := range config.AuthInfos {
+		users = append(users, user)
+	}
+
+	return users, cobra.ShellCompDirectiveNoFileComp
 }

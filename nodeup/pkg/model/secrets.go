@@ -49,10 +49,13 @@ func (b *SecretBuilder) Build(c *fi.ModelBuilderContext) error {
 		return fmt.Errorf("KeyStore not set")
 	}
 
-	// @step: retrieve the platform ca
-	if err := b.BuildCertificateTask(c, fi.CertificateIDCA, "ca.crt", nil); err != nil {
-		return err
-	}
+	// @step: write out the platform ca
+	c.AddTask(&nodetasks.File{
+		Path:     filepath.Join(b.PathSrvKubernetes(), "ca.crt"),
+		Contents: fi.NewStringResource(b.NodeupConfig.CAs[fi.CertificateIDCA]),
+		Type:     nodetasks.FileType_File,
+		Mode:     s("0600"),
+	})
 
 	// Write out docker auth secret, if exists
 	if b.SecretStore != nil {
@@ -116,6 +119,7 @@ func (b *SecretBuilder) Build(c *fi.ModelBuilderContext) error {
 		issueCert := &nodetasks.IssueCert{
 			Name:           "master",
 			Signer:         fi.CertificateIDCA,
+			KeypairID:      b.NodeupConfig.KeypairIDs[fi.CertificateIDCA],
 			Type:           "server",
 			Subject:        nodetasks.PKIXName{CommonName: "kubernetes-master"},
 			AlternateNames: alternateNames,
@@ -129,25 +133,6 @@ func (b *SecretBuilder) Build(c *fi.ModelBuilderContext) error {
 		if err != nil {
 			return err
 		}
-	}
-
-	{
-		issueCert := &nodetasks.IssueCert{
-			Name:   "apiserver-aggregator",
-			Signer: "apiserver-aggregator-ca",
-			Type:   "client",
-			// Must match RequestheaderAllowedNames
-			Subject: nodetasks.PKIXName{CommonName: "aggregator"},
-		}
-		c.AddTask(issueCert)
-		err := issueCert.AddFileTasks(c, b.PathSrvKubernetes(), "apiserver-aggregator", "apiserver-aggregator-ca", nil)
-		if err != nil {
-			return err
-		}
-	}
-
-	if err := b.BuildPrivateKeyTask(c, "service-account", "service-account.key", nil); err != nil {
-		return err
 	}
 
 	// Support for basic auth was deprecated 1.16 and removed in 1.19

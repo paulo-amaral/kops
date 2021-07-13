@@ -56,6 +56,7 @@ func (b *KopsControllerBuilder) Build(c *fi.ModelBuilderContext) error {
 	issueCert := &nodetasks.IssueCert{
 		Name:           "kops-controller",
 		Signer:         fi.CertificateIDCA,
+		KeypairID:      b.NodeupConfig.KeypairIDs[fi.CertificateIDCA],
 		Type:           "server",
 		Subject:        nodetasks.PKIXName{CommonName: "kops-controller"},
 		AlternateNames: []string{"kops-controller.internal." + b.Cluster.ObjectMeta.Name},
@@ -84,7 +85,7 @@ func (b *KopsControllerBuilder) Build(c *fi.ModelBuilderContext) error {
 	}
 	for _, cert := range caList {
 		owner := wellknownusers.KopsControllerName
-		err := b.BuildCertificatePairTask(c, cert, pkiDir, cert, &owner)
+		err := b.BuildCertificatePairTask(c, cert, pkiDir, cert, &owner, nil)
 		if err != nil {
 			return err
 		}

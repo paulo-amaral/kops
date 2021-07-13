@@ -41,6 +41,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
 const (
@@ -55,7 +56,7 @@ const (
 // Router is a Router task.
 type Router struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	Network *string
 	Region  *string
@@ -96,7 +97,7 @@ func (r *Router) Find(c *fi.Context) (*Router, error) {
 		Name:                          &found.Name,
 		Lifecycle:                     r.Lifecycle,
 		Network:                       &found.Network,
-		Region:                        &found.Region,
+		Region:                        fi.String(lastComponent(found.Region)),
 		NATIPAllocationOption:         &nat.NatIpAllocateOption,
 		SourceSubnetworkIPRangesToNAT: &nat.SourceSubnetworkIpRangesToNat,
 	}, nil
@@ -202,6 +203,6 @@ func (*Router) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *Rout
 }
 
 // TerraformName returns the Terraform name.
-func (r *Router) TerraformName() *terraform.Literal {
-	return terraform.LiteralProperty("google_compute_router_nat", *r.Name, "name")
+func (r *Router) TerraformName() *terraformWriter.Literal {
+	return terraformWriter.LiteralProperty("google_compute_router_nat", *r.Name, "name")
 }

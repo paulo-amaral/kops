@@ -22,14 +22,12 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
+	"sort"
 
 	"gopkg.in/square/go-jose.v2"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/featureflag"
-	"k8s.io/kops/pkg/model/iam"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/fitasks"
 )
@@ -38,7 +36,7 @@ import (
 type IssuerDiscoveryModelBuilder struct {
 	*KopsModelContext
 
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 	Cluster   *kops.Cluster
 }
 
@@ -53,7 +51,8 @@ type oidcDiscovery struct {
 }
 
 func (b *IssuerDiscoveryModelBuilder) Build(c *fi.ModelBuilderContext) error {
-	if !featureflag.PublicJWKS.Enabled() {
+	said := b.Cluster.Spec.ServiceAccountIssuerDiscovery
+	if said == nil || said.DiscoveryStore == "" {
 		return nil
 	}
 
@@ -68,19 +67,14 @@ func (b *IssuerDiscoveryModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		SigningKey: skTask,
 	}
 
-	serviceAccountIssuer, err := iam.ServiceAccountIssuer(&b.Cluster.Spec)
-	if err != nil {
-		return err
-	}
-
-	discovery, err := buildDiscoveryJSON(serviceAccountIssuer)
+	discovery, err := buildDiscoveryJSON(*b.Cluster.Spec.KubeAPIServer.ServiceAccountIssuer)
 	if err != nil {
 		return err
 	}
 	keysFile := &fitasks.ManagedFile{
 		Contents:  keys,
 		Lifecycle: b.Lifecycle,
-		Location:  fi.String("/openid/v1/jwks"),
+		Location:  fi.String("openid/v1/jwks"),
 		Name:      fi.String("keys.json"),
 		Base:      fi.String(b.Cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryStore),
 		Public:    fi.Bool(true),
@@ -90,7 +84,7 @@ func (b *IssuerDiscoveryModelBuilder) Build(c *fi.ModelBuilderContext) error {
 	discoveryFile := &fitasks.ManagedFile{
 		Contents:  fi.NewBytesResource(discovery),
 		Lifecycle: b.Lifecycle,
-		Location:  fi.String("oidc/.well-known/openid-configuration"),
+		Location:  fi.String(".well-known/openid-configuration"),
 		Name:      fi.String("discovery.json"),
 		Base:      fi.String(b.Cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryStore),
 		Public:    fi.Bool(true),
@@ -102,7 +96,7 @@ func (b *IssuerDiscoveryModelBuilder) Build(c *fi.ModelBuilderContext) error {
 
 func buildDiscoveryJSON(issuerURL string) ([]byte, error) {
 	d := oidcDiscovery{
-		Issuer:                fmt.Sprintf("%v/", issuerURL),
+		Issuer:                issuerURL,
 		JWKSURI:               fmt.Sprintf("%v/openid/v1/jwks", issuerURL),
 		AuthorizationEndpoint: "urn:kubernetes:programmatic_authorization",
 		ResponseTypes:         []string{"id_token"},
@@ -128,38 +122,36 @@ func (o *OIDCKeys) GetDependencies(tasks map[string]fi.Task) []fi.Task {
 	}
 }
 func (o *OIDCKeys) Open() (io.Reader, error) {
+	keyset := o.SigningKey.Keyset()
+	var keys []jose.JSONWebKey
 
-	certBytes, err := fi.ResourceAsBytes(o.SigningKey.Certificate())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get cert: %w", err)
-	}
-	block, _ := pem.Decode(certBytes)
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse cert: %w", err)
-	}
+	for _, item := range keyset.Items {
+		if item.DistrustTimestamp != nil {
+			continue
+		}
 
-	publicKey := cert.PublicKey
+		publicKey := item.Certificate.PublicKey
+		publicKeyDERBytes, err := x509.MarshalPKIXPublicKey(publicKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize public key to DER format: %v", err)
+		}
 
-	publicKeyDERBytes, err := x509.MarshalPKIXPublicKey(publicKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize public key to DER format: %v", err)
-	}
+		hasher := crypto.SHA256.New()
+		hasher.Write(publicKeyDERBytes)
+		publicKeyDERHash := hasher.Sum(nil)
 
-	hasher := crypto.SHA256.New()
-	hasher.Write(publicKeyDERBytes)
-	publicKeyDERHash := hasher.Sum(nil)
+		keyID := base64.RawURLEncoding.EncodeToString(publicKeyDERHash)
 
-	keyID := base64.RawURLEncoding.EncodeToString(publicKeyDERHash)
-
-	keys := []jose.JSONWebKey{
-		{
+		keys = append(keys, jose.JSONWebKey{
 			Key:       publicKey,
 			KeyID:     keyID,
 			Algorithm: string(jose.RS256),
 			Use:       "sig",
-		},
+		})
 	}
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i].KeyID < keys[j].KeyID
+	})
 
 	keyResponse := KeyResponse{Keys: keys}
 	jsonBytes, err := json.MarshalIndent(keyResponse, "", "")

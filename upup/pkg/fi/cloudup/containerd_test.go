@@ -22,6 +22,8 @@ import (
 	"reflect"
 	"testing"
 
+	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/apis/nodeup"
 	"k8s.io/kops/util/pkg/architectures"
 )
 
@@ -43,8 +45,8 @@ func TestContainerdVersionUrlHash(t *testing.T) {
 		{
 			arch:    architectures.ArchitectureArm64,
 			version: "1.3.4",
-			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.6.tgz",
-			hash:    "998b3b6669335f1a1d8c475fb7c211ed1e41c2ff37275939e2523666ccb7d910",
+			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.7.tgz",
+			hash:    "be8c9a5a06ebec8fb1d36e867cd00fb5777746a9812a0cae2966778ff899c525",
 			err:     nil,
 		},
 		{
@@ -57,8 +59,8 @@ func TestContainerdVersionUrlHash(t *testing.T) {
 		{
 			arch:    architectures.ArchitectureArm64,
 			version: "1.3.10",
-			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.6.tgz",
-			hash:    "998b3b6669335f1a1d8c475fb7c211ed1e41c2ff37275939e2523666ccb7d910",
+			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.7.tgz",
+			hash:    "be8c9a5a06ebec8fb1d36e867cd00fb5777746a9812a0cae2966778ff899c525",
 			err:     nil,
 		},
 		{
@@ -71,8 +73,8 @@ func TestContainerdVersionUrlHash(t *testing.T) {
 		{
 			arch:    architectures.ArchitectureArm64,
 			version: "1.4.1",
-			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.6.tgz",
-			hash:    "998b3b6669335f1a1d8c475fb7c211ed1e41c2ff37275939e2523666ccb7d910",
+			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.7.tgz",
+			hash:    "be8c9a5a06ebec8fb1d36e867cd00fb5777746a9812a0cae2966778ff899c525",
 			err:     nil,
 		},
 		{
@@ -173,7 +175,7 @@ func TestContainerdVersionUrl(t *testing.T) {
 		{
 			arch:    architectures.ArchitectureArm64,
 			version: "1.3.4",
-			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.6.tgz",
+			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.7.tgz",
 			err:     nil,
 		},
 		{
@@ -185,7 +187,7 @@ func TestContainerdVersionUrl(t *testing.T) {
 		{
 			arch:    architectures.ArchitectureArm64,
 			version: "1.4.1",
-			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.6.tgz",
+			url:     "https://download.docker.com/linux/static/stable/aarch64/docker-20.10.7.tgz",
 			err:     nil,
 		},
 		{
@@ -280,7 +282,7 @@ func TestContainerdVersionHash(t *testing.T) {
 		{
 			arch:    architectures.ArchitectureArm64,
 			version: "1.4.1",
-			hash:    "998b3b6669335f1a1d8c475fb7c211ed1e41c2ff37275939e2523666ccb7d910",
+			hash:    "be8c9a5a06ebec8fb1d36e867cd00fb5777746a9812a0cae2966778ff899c525",
 			err:     nil,
 		},
 		{
@@ -324,4 +326,25 @@ func TestContainerdVersionsHashesAmd64(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContainerdConfig(t *testing.T) {
+	cluster := &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			ContainerRuntime:  "containerd",
+			Containerd:        &kops.ContainerdConfig{},
+			KubernetesVersion: "1.21.0",
+			Networking: &kops.NetworkingSpec{
+				Kubenet: &kops.KubenetNetworkingSpec{},
+			},
+		},
+	}
+	config := &nodeup.Config{}
+
+	config.ContainerdConfig = buildContainerdConfig(cluster)
+
+	if config.ContainerdConfig == "" {
+		t.Errorf("got unexpected empty containerd config")
+	}
+
 }

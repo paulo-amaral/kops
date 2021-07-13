@@ -107,7 +107,7 @@ func (t *ProtokubeBuilder) Build(c *fi.ModelBuilderContext) error {
 				}
 			}
 			for _, x := range []string{"etcd", "etcd-peer", "etcd-client"} {
-				if err := t.BuildPrivateKeyTask(c, x, fmt.Sprintf("%s-key.pem", x), nil); err != nil {
+				if err := t.BuildLegacyPrivateKeyTask(c, x, fmt.Sprintf("%s-key.pem", x), nil); err != nil {
 					return err
 				}
 			}
@@ -275,7 +275,7 @@ func (t *ProtokubeBuilder) ProtokubeFlags(k8sVersion semver.Version) (*Protokube
 		if etcdContainerImage != "" {
 			image = etcdContainerImage
 		}
-		assets := assets.NewAssetBuilder(t.Cluster, "")
+		assets := assets.NewAssetBuilder(t.Cluster, false)
 		remapped, err := assets.RemapImage(image)
 		if err != nil {
 			return nil, fmt.Errorf("unable to remap container %q: %v", image, err)
